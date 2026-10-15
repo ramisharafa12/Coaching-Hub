@@ -1,0 +1,87 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@theme {
+  --font-sans: "Inter", "Hind Siliguri", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-ink: #0f1d1a;        /* sidebar */
+  --color-ink-soft: #1b2e2a;
+  --color-mint: #eef3ef;       /* page background */
+  --color-brand: #11766c;      /* primary teal */
+  --color-brand-dark: #0c5c54;
+  --color-brand-soft: #d6ebe6; /* pills, answered */
+  --color-line: #e2e8e4;
+  --color-muted: #5e6e69;
+  --color-text: #13201d;
+  --color-warn: #7a5600;
+  --color-warn-soft: #fbefc4;
+  --color-danger: #9a3412;
+  --color-danger-soft: #fde4d8;
+}
+
+html,
+body {
+  background: var(--color-mint);
+  color: var(--color-text);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Inputs share one look */
+.field {
+  width: 100%;
+  border: 1px solid var(--color-line);
+  background: #f6f9f7;
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+.field:focus {
+  border-color: var(--color-brand);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(17 118 108 / 0.12);
+}
+.label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  margin-bottom: 0.3rem;
+}
+
+/* Tables in the mockup style */
+.tbl {
+  width: 100%;
+  font-size: 0.85rem;
+  border-collapse: collapse;
+}
+.tbl th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--color-line);
+  white-space: nowrap;
+}
+.tbl td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--color-line);
+  vertical-align: middle;
+}
+.tbl tr:last-child td {
+  border-bottom: none;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body {
+    background: #fff;
+  }
+}

@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// Security model
+// - Staff (admin, teacher) sign in with email and use the Firestore client SDK directly.
+//   Their role lives in users/{uid}, written only by an admin or by the server.
+// - Students and guardians sign in with phone OTP and never touch Firestore directly.
+//   Everything they see goes through the Next.js API routes, which use the Admin SDK
+//   and only return that person's own data. This keeps answer keys and other
+//   students' data out of their reach.
+// - Exam submissions are written only by the server, which grades them.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function isStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDoc().data.role in ['admin', 'teacher'];
+    }
+    function isAdmin() {
+      return isStaff() && userDoc().data.role == 'admin';
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isStaff());
+      allow write: if isAdmin();
+    }
+
+    match /staffInvites/{email} {
+      allow read, write: if isAdmin();
+    }
+
+    match /batches/{id}    { allow read, write: if isStaff(); }
+    match /students/{id}   { allow read, write: if isStaff(); }
+    match /questions/{id}  { allow read, write: if isStaff(); }
+    match /attendance/{id} { allow read, write: if isStaff(); }
+    match /payments/{id}   { allow read, write: if isStaff(); }
+    match /notices/{id}    { allow read, write: if isStaff(); }
+
+    match /exams/{examId} {
+      allow read, write: if isStaff();
+
+      match /submissions/{studentId} {
+        allow read: if isStaff();
+        allow delete: if isAdmin();
+        allow create, update: if false; // server only
+      }
+    }
+
+    match /smsLog/{id} {
+      allow read: if isStaff();
+      allow write: if false; // server only
+    }
+  }
+}
