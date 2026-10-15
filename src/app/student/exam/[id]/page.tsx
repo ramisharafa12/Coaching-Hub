@@ -16,6 +16,7 @@ interface Meta {
   subject: string;
   startAt: number;
   endsAt: number;
+  revealAt: number; // answers and solutions open (end + late-submit grace)
   durationMin: number;
   marksPerQuestion: number;
   negativeMark: number;
@@ -49,6 +50,7 @@ type Resp =
   | { state: "scheduled"; exam: Meta }
   | { state: "live"; exam: Meta; paper: PaperQ[] }
   | { state: "submitted"; exam: Meta; result: Result }
+  | { state: "closing"; exam: Meta }
   | { state: "ended"; exam: Meta; result: Result | null; solutions: Solution[] };
 
 export default function ExamPage() {
@@ -77,7 +79,8 @@ export default function ExamPage() {
 
   if (data.state === "scheduled") return <Waiting exam={data.exam} offset={offset} onStart={load} />;
   if (data.state === "live") return <TakeExam exam={data.exam} paper={data.paper} offset={offset} onDone={load} />;
-  if (data.state === "submitted") return <Submitted exam={data.exam} result={data.result} />;
+  if (data.state === "submitted") return <Submitted exam={data.exam} result={data.result} offset={offset} onReveal={load} />;
+  if (data.state === "closing") return <Closing exam={data.exam} offset={offset} onDone={load} />;
   return <Review exam={data.exam} result={data.result} solutions={data.solutions} />;
 }
 
@@ -369,18 +372,100 @@ function ScoreCard({ exam, result }: { exam: Meta; result: Result }) {
   );
 }
 
-function Submitted({ exam, result }: { exam: Meta; result: Result }) {
+/** Reloads once when the solutions open, so the page moves on to the review by itself. */
+function useRevealReload(exam: Meta, offset: number, onReveal: () => void) {
+  const now = useNow(offset);
+  const fired = useRef(false);
+  useEffect(() => {
+    if (now >= exam.revealAt && !fired.current) {
+      fired.current = true;
+      onReveal();
+    }
+  }, [now, exam.revealAt, onReveal]);
+}
+
+function revealTime(exam: Meta) {
+  return new Date(exam.revealAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Dhaka" });
+}
+
+function Submitted({ exam, result, offset, onReveal }: { exam: Meta; result: Result; offset: number; onReveal: () => void }) {
+  useRevealReload(exam, offset, onReveal);
   return (
     <div className="mx-auto max-w-md space-y-4">
       <ScoreCard exam={exam} result={result} />
       <p className="text-center text-sm text-muted">
-        Submitted. Correct answers, explanations and your rank appear when the exam closes at{" "}
-        {new Date(exam.endsAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Dhaka" })}.
+        Submitted. Correct answers, explanations and your rank appear at {revealTime(exam)}, once everyone has finished.
       </p>
       <Link href="/student" className="block text-center text-sm font-semibold text-brand">
         Back to home
       </Link>
     </div>
+  );
+}
+
+/**
+ * Time is up but late submissions are still accepted for a short while. If this device saved
+ * answers (the page was reloaded or the connection dropped at the end), send them now.
+ */
+function Closing({ exam, offset, onDone }: { exam: Meta; offset: number; onDone: () => void }) {
+  const { api } = useAuth();
+  const storageKey = `exam:${exam.id}`;
+  const [status, setStatus] = useState<"checking" | "sending" | "none" | "failed">("checking");
+  const [error, setError] = useState<string | null>(null);
+  const tried = useRef(false);
+  useRevealReload(exam, offset, onDone);
+
+  const send = useCallback(async () => {
+    let saved: { answers?: Record<string, number>; tabSwitches?: number } | null = null;
+    try {
+      saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+    } catch {
+      /* storage unavailable */
+    }
+    if (!saved?.answers || !Object.keys(saved.answers).length) return setStatus("none");
+    setStatus("sending");
+    try {
+      await api(`/api/student/exams/${exam.id}/submit`, {
+        method: "POST",
+        body: JSON.stringify({ answers: saved.answers, tabSwitches: saved.tabSwitches || 0 }),
+      });
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        /* ignore */
+      }
+      onDone();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Submit failed";
+      if (/already submitted/i.test(message)) return onDone();
+      setError(message);
+      setStatus("failed");
+    }
+  }, [api, exam.id, onDone, storageKey]);
+
+  useEffect(() => {
+    if (tried.current) return;
+    tried.current = true;
+    send();
+  }, [send]);
+
+  return (
+    <Card className="mx-auto max-w-md text-center">
+      <Badge tone="yellow">Time is up</Badge>
+      <h1 className="mt-2 text-xl font-bold">{exam.title}</h1>
+      {status === "sending" || status === "checking" ? (
+        <p className="mt-4 text-sm text-muted">Sending the answers saved on this device…</p>
+      ) : status === "failed" ? (
+        <>
+          <ErrorNote>{error}</ErrorNote>
+          <Button className="mt-4" onClick={send}>
+            Try again
+          </Button>
+        </>
+      ) : (
+        <p className="mt-4 text-sm text-muted">You didn&apos;t submit this exam. Solutions open at {revealTime(exam)}.</p>
+      )}
+    </Card>
   );
 }
 

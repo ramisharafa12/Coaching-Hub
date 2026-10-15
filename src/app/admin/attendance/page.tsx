@@ -51,23 +51,26 @@ export default function AttendancePage() {
     }
   }
 
-  async function smsAbsent() {
+  async function messageAbsent() {
     if (!absent.length) return;
     const batchName = batches.data.find((b) => b.id === batchId)?.name || "";
+    // "আজ" (today) only when marking today's class; an earlier date is named on its own.
+    const when = date === dhakaDate() ? `আজ (${date})` : `${date} তারিখে`;
     try {
-      const r = await api<{ sent: number; mode: string }>("/api/sms", {
+      const r = await api<{ sent: number }>("/api/messages", {
         method: "POST",
         body: JSON.stringify({
           kind: "absent",
           messages: absent.map((s) => ({
             phone: s.guardianPhone,
-            message: `${APP_NAME}: ${s.name} আজ (${date}) ${batchName} ক্লাসে অনুপস্থিত ছিল।`,
+            studentId: s.id,
+            message: `${APP_NAME}: ${s.name} ${when} ${batchName} ক্লাসে অনুপস্থিত ছিল।`,
           })),
         }),
       });
-      setMsg(r.mode === "log" ? `Logged ${r.sent} absence SMS (SMS_PROVIDER=log).` : `Sent ${r.sent} absence SMS.`);
+      setMsg(`Sent ${r.sent} absence message${r.sent === 1 ? "" : "s"} to guardians' inboxes.`);
     } catch (err) {
-      setMsg(err instanceof Error ? err.message : "SMS failed");
+      setMsg(err instanceof Error ? err.message : "Could not send");
     }
   }
 
@@ -143,8 +146,8 @@ export default function AttendancePage() {
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-3">
               {saved && absent.length > 0 && (
-                <Button variant="outline" onClick={smsAbsent}>
-                  SMS guardians of {absent.length} absent
+                <Button variant="outline" onClick={messageAbsent}>
+                  Message guardians of {absent.length} absent
                 </Button>
               )}
               {msg && <span className="text-sm text-muted">{msg}</span>}

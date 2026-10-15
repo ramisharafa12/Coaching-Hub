@@ -11,7 +11,7 @@ import { APP_NAME } from "@/lib/config";
 import { db } from "@/lib/firebase";
 import { useCollection, useDoc } from "@/lib/hooks";
 import type { Batch, Exam, Student, Submission } from "@/lib/types";
-import { examDateLabel, examEndsAt, examState, ordinal, round2 } from "@/lib/utils";
+import { examDateLabel, examEndsAt, examState, ordinal, round2, solutionsAt } from "@/lib/utils";
 import { where } from "firebase/firestore";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -31,7 +31,7 @@ export default function ExamDetailPage() {
   );
   const [tab, setTab] = useState<Tab>("merit");
   const [now, setNow] = useState(Date.now());
-  const [smsState, setSmsState] = useState<string | null>(null);
+  const [sendState, setSendState] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -84,7 +84,7 @@ export default function ExamDetailPage() {
     router.push("/admin/exams");
   }
 
-  async function smsResults() {
+  async function messageResults() {
     const byId = new Map(students.data.map((s) => [s.id, s]));
     const messages = merit
       .map((m) => {
@@ -92,24 +92,26 @@ export default function ExamDetailPage() {
         if (!s) return null;
         return {
           phone: s.guardianPhone,
+          studentId: s.id,
           message: `${APP_NAME}: ${s.name} "${e.title}" পরীক্ষায় ${m.score}/${e.totalMarks} পেয়েছে। ব্যাচে অবস্থান ${m.rank}/${merit.length}।`,
         };
       })
       .filter(Boolean);
     const absentMsgs = absent.map((s) => ({
       phone: s.guardianPhone,
+      studentId: s.id,
       message: `${APP_NAME}: ${s.name} "${e.title}" পরীক্ষায় অংশ নেয়নি।`,
     }));
-    if (!confirm(`Send ${messages.length + absentMsgs.length} result SMS to guardians?`)) return;
-    setSmsState("Sending…");
+    if (!confirm(`Send ${messages.length + absentMsgs.length} result messages to guardians?`)) return;
+    setSendState("Sending…");
     try {
-      const r = await api<{ sent: number; failed: number; mode: string }>("/api/sms", {
+      const r = await api<{ sent: number }>("/api/messages", {
         method: "POST",
         body: JSON.stringify({ kind: "result", messages: [...messages, ...absentMsgs] }),
       });
-      setSmsState(r.mode === "log" ? `Logged ${r.sent} messages (SMS_PROVIDER=log, nothing actually sent).` : `Sent ${r.sent}, failed ${r.failed}.`);
+      setSendState(`Sent ${r.sent} result messages to guardians' inboxes.`);
     } catch (err) {
-      setSmsState(err instanceof Error ? err.message : "Failed");
+      setSendState(err instanceof Error ? err.message : "Failed");
     }
   }
 
@@ -123,9 +125,9 @@ export default function ExamDetailPage() {
             <Link href={`/admin/exams/${e.id}/print`} target="_blank">
               <Button variant="outline">Print paper (A–D sets)</Button>
             </Link>
-            {st === "ended" && (
-              <Button variant="outline" onClick={smsResults} disabled={!merit.length && !absent.length}>
-                SMS results to guardians
+            {now >= solutionsAt(e) && (
+              <Button variant="outline" onClick={messageResults} disabled={!merit.length && !absent.length}>
+                Message results to guardians
               </Button>
             )}
             <Button variant="danger" onClick={remove}>
@@ -134,7 +136,7 @@ export default function ExamDetailPage() {
           </>
         }
       />
-      {smsState && <Card className="mb-4 text-sm">{smsState}</Card>}
+      {sendState && <Card className="mb-4 text-sm">{sendState}</Card>}
 
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard

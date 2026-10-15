@@ -2,17 +2,19 @@
 
 import { addDoc, collection, deleteDoc, doc, updateDoc, where, writeBatch } from "firebase/firestore";
 import { useMemo, useRef, useState } from "react";
+import { useAuth } from "@/components/AuthProvider";
 import { Badge, Button, Card, Empty, ErrorNote, Modal, PageHeader, Spinner } from "@/components/ui";
 import { db } from "@/lib/firebase";
 import { downloadTemplate, readRows, rowsToObjects } from "@/lib/excel";
 import { feeRows, type FeeStatus } from "@/lib/fees";
 import { useById, useCollection } from "@/lib/hooks";
 import type { AttendanceDoc, Batch, Payment, Student } from "@/lib/types";
-import { dhakaDate, dhakaMonth, normalizeBdPhone, prettyPhone, shortBatch } from "@/lib/utils";
+import { dhakaDate, dhakaMonth, normalizeBdPhone, phoneClash, prettyPhone, shortBatch } from "@/lib/utils";
 
 const blank = { name: "", roll: "", batchId: "", phone: "", guardianPhone: "", guardianName: "" };
 
 export default function StudentsPage() {
+  const { api } = useAuth();
   const month = dhakaMonth();
   const since = dhakaDate(Date.now() - 30 * 86400000);
   const students = useCollection<Student>("students");
@@ -29,7 +31,27 @@ export default function StudentsPage() {
   const [form, setForm] = useState(blank);
   const [error, setError] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [pinNote, setPinNote] = useState<{ who: string; phone: string; pin: string } | null>(null);
+  const [pinBusy, setPinBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Login PINs are made on the server and shown here once; only a hash is kept.
+  async function newPin(who: "student" | "guardian") {
+    if (!editing) return;
+    const phone = who === "student" ? editing.phone : editing.guardianPhone;
+    const label = who === "student" ? editing.name : editing.guardianName || `${editing.name}'s guardian`;
+    if (!confirm(`Make a new login PIN for ${label} (${prettyPhone(phone)})? Any old PIN stops working.`)) return;
+    setPinBusy(true);
+    setError(null);
+    try {
+      const r = await api<{ phone: string; pin: string }>("/api/staff/pin", { method: "POST", body: JSON.stringify({ phone }) });
+      setPinNote({ who: label, phone: r.phone, pin: r.pin });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not make a PIN");
+    } finally {
+      setPinBusy(false);
+    }
+  }
 
   const attendancePct = useMemo(() => {
     const tally = new Map<string, { p: number; t: number }>();
@@ -81,6 +103,7 @@ export default function StudentsPage() {
       guardianName: s.guardianName || "",
     });
     setError(null);
+    setPinNote(null);
     setOpen(true);
   }
 
@@ -92,9 +115,8 @@ export default function StudentsPage() {
     if (!form.batchId) return setError("Pick a batch.");
     if (!phone) return setError("Student phone isn't a valid BD mobile number.");
     if (!guardianPhone) return setError("Guardian phone isn't a valid BD mobile number.");
-    if (phone === guardianPhone) return setError("Student and guardian need different numbers — each logs in with their own.");
-    const clash = students.data.find((s) => s.phone === phone && s.id !== editing?.id);
-    if (clash) return setError(`${prettyPhone(phone)} already belongs to ${clash.name}.`);
+    const clash = phoneClash(students.data, { id: editing?.id, phone, guardianPhone });
+    if (clash) return setError(clash);
 
     const data = {
       name: form.name.trim(),
@@ -128,7 +150,8 @@ export default function StudentsPage() {
         byName.set(b.name.toLowerCase(), b.id);
         byName.set(shortBatch(b.name).toLowerCase(), b.id);
       });
-      const existingPhones = new Set(students.data.map((s) => s.phone));
+      // Rows accepted so far count too, so two rows in one file can't clash either.
+      const known: Pick<Student, "id" | "name" | "phone" | "guardianPhone">[] = [...students.data];
       const problems: string[] = [];
       const toAdd: Omit<Student, "id">[] = [];
       objects.forEach((o, i) => {
@@ -141,8 +164,9 @@ export default function StudentsPage() {
         if (!batchId) return problems.push(`Row ${line}: batch "${o["batch"]}" not found`);
         if (!phone) return problems.push(`Row ${line}: invalid student phone`);
         if (!guardianPhone) return problems.push(`Row ${line}: invalid guardian phone`);
-        if (existingPhones.has(phone)) return problems.push(`Row ${line}: ${prettyPhone(phone)} already exists`);
-        existingPhones.add(phone);
+        const clash = phoneClash(known, { phone, guardianPhone });
+        if (clash) return problems.push(`Row ${line}: ${clash}`);
+        known.push({ id: `row-${line}`, name, phone, guardianPhone });
         toAdd.push({ name, roll: o["roll"] || "", batchId, phone, guardianPhone, guardianName: o["guardian name"] || "", createdAt: Date.now() });
       });
       for (let i = 0; i < toAdd.length; i += 400) {
@@ -299,7 +323,7 @@ export default function StudentsPage() {
               <input className="field" inputMode="tel" placeholder="01711000000" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </div>
             <div>
-              <label className="label">Guardian phone (login + SMS)</label>
+              <label className="label">Guardian phone (login + messages)</label>
               <input className="field" inputMode="tel" placeholder="01811000000" value={form.guardianPhone} onChange={(e) => setForm({ ...form, guardianPhone: e.target.value })} />
             </div>
             <div className="col-span-2">
@@ -307,6 +331,30 @@ export default function StudentsPage() {
               <input className="field" value={form.guardianName} onChange={(e) => setForm({ ...form, guardianName: e.target.value })} />
             </div>
           </div>
+          {editing && (
+            <div className="rounded-xl bg-mint p-3">
+              <div className="mb-1 text-sm font-semibold">Login PINs</div>
+              <p className="mb-2 text-xs text-muted">
+                Students and guardians sign in with their phone number and a 6-digit PIN — free, no SMS. A guardian PIN works for
+                every child on that number.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" disabled={pinBusy} onClick={() => newPin("student")}>
+                  New student PIN
+                </Button>
+                <Button type="button" size="sm" variant="outline" disabled={pinBusy} onClick={() => newPin("guardian")}>
+                  New guardian PIN
+                </Button>
+              </div>
+              {pinNote && (
+                <div className="mt-3 rounded-lg bg-white px-3 py-2 text-sm">
+                  PIN for <b>{pinNote.who}</b> · {prettyPhone(pinNote.phone)}:{" "}
+                  <span className="font-mono text-lg font-bold tracking-widest">{pinNote.pin}</span>
+                  <div className="text-xs text-muted">Write it down and hand it over on paper. It won&apos;t be shown again.</div>
+                </div>
+              )}
+            </div>
+          )}
           <ErrorNote>{error}</ErrorNote>
           <div className="flex justify-between">
             {editing ? (

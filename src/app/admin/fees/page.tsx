@@ -60,6 +60,7 @@ export default function FeesPage() {
       amount: form.amount,
       method: form.method,
       reference: form.reference.trim().toUpperCase(),
+      recordedBy: "staff",
       createdAt: Date.now(),
     };
     await addDoc(collection(db, "payments"), p);
@@ -69,17 +70,21 @@ export default function FeesPage() {
   async function remind(list: FeeRow[]) {
     if (!list.length) return;
     try {
-      const r = await api<{ sent: number; mode: string }>("/api/sms", {
+      const r = await api<{ sent: number }>("/api/messages", {
         method: "POST",
         body: JSON.stringify({
           kind: "fee",
-          messages: list.map((row) => ({ phone: row.student.guardianPhone, message: feeReminderText(APP_NAME, row, monthLabel(month)) })),
+          messages: list.map((row) => ({
+            phone: row.student.guardianPhone,
+            studentId: row.student.id,
+            message: feeReminderText(APP_NAME, row, monthLabel(month)),
+          })),
         }),
       });
       setSent((s) => ({ ...s, ...Object.fromEntries(list.map((l) => [l.student.id, true])) }));
-      setMsg(r.mode === "log" ? `Logged ${r.sent} reminders (SMS_PROVIDER=log).` : `Sent ${r.sent} reminders.`);
+      setMsg(`Sent ${r.sent} reminder${r.sent === 1 ? "" : "s"} to guardians' inboxes.`);
     } catch (err) {
-      setMsg(err instanceof Error ? err.message : "SMS failed");
+      setMsg(err instanceof Error ? err.message : "Could not send");
     }
   }
 
@@ -128,7 +133,7 @@ export default function FeesPage() {
           />
           {tab === "due" && due.length > 0 && (
             <Button size="sm" variant="outline" onClick={() => remind(due.filter((r) => !sent[r.student.id]))}>
-              Remind all by SMS
+              Remind all guardians
             </Button>
           )}
         </div>
@@ -145,7 +150,7 @@ export default function FeesPage() {
                     <th>Batch</th>
                     <th>Amount due</th>
                     <th>Status</th>
-                    <th>Last payment</th>
+                    <th>Paid this month</th>
                     <th className="text-right">Actions</th>
                   </tr>
                 </thead>
@@ -159,8 +164,8 @@ export default function FeesPage() {
                         <Badge tone="yellow">{r.status}</Badge>
                       </td>
                       <td className="whitespace-nowrap text-xs text-muted">
-                        {r.lastPayment
-                          ? `${monthLabel(r.lastPayment.month).split(" ")[0].slice(0, 3)} · ${r.lastPayment.method}${r.lastPayment.reference ? " " + r.lastPayment.reference : ""}`
+                        {r.paid > 0 && r.lastPayment
+                          ? `${taka(r.paid)} · ${r.lastPayment.method}${r.lastPayment.reference ? " " + r.lastPayment.reference : ""}`
                           : "—"}
                       </td>
                       <td className="whitespace-nowrap text-right">
@@ -169,7 +174,7 @@ export default function FeesPage() {
                             Record payment
                           </Button>
                           <Button size="sm" variant="outline" onClick={() => remind([r])} disabled={sent[r.student.id]}>
-                            {sent[r.student.id] ? "Sent" : "Send SMS"}
+                            {sent[r.student.id] ? "Sent" : "Remind"}
                           </Button>
                         </span>
                       </td>
@@ -200,7 +205,14 @@ export default function FeesPage() {
                     <td className="whitespace-nowrap">{formatShortDate(p.createdAt)}</td>
                     <td className="font-semibold">{studentMap.get(p.studentId)?.name || "Removed student"}</td>
                     <td>{taka(p.amount)}</td>
-                    <td>{p.method}</td>
+                    <td className="whitespace-nowrap">
+                      {p.method}
+                      {p.demo && (
+                        <span className="ml-1.5" title="Paid with the guardian portal's demo checkout — no real money moved">
+                          <Badge tone="yellow">Demo</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td className="font-mono text-xs">{p.reference || "—"}</td>
                     <td className="text-right">
                       <button className="text-xs text-danger" onClick={() => undo(p)}>

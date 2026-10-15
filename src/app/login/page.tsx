@@ -2,17 +2,15 @@
 
 import {
   GoogleAuthProvider,
-  RecaptchaVerifier,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   sendPasswordResetEmail,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
-  signInWithPhoneNumber,
   signInWithPopup,
-  type ConfirmationResult,
 } from "firebase/auth";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { homeForRole, useAuth } from "@/components/AuthProvider";
 import { Button, ErrorNote, Spinner } from "@/components/ui";
 import { APP_NAME } from "@/lib/config";
@@ -24,9 +22,6 @@ type Mode = "phone" | "staff";
 function friendlyError(e: unknown): string {
   const code = (e as { code?: string })?.code || "";
   const map: Record<string, string> = {
-    "auth/invalid-phone-number": "That phone number doesn't look right.",
-    "auth/invalid-verification-code": "Wrong code. Check the SMS and try again.",
-    "auth/code-expired": "The code expired. Request a new one.",
     "auth/too-many-requests": "Too many attempts. Wait a few minutes and try again.",
     "auth/invalid-credential": "Wrong email or password.",
     "auth/wrong-password": "Wrong email or password.",
@@ -34,7 +29,6 @@ function friendlyError(e: unknown): string {
     "auth/email-already-in-use": "An account with this email already exists. Sign in instead.",
     "auth/weak-password": "Use at least 6 characters for the password.",
     "auth/popup-closed-by-user": "Google sign-in was closed.",
-    "auth/billing-not-enabled": "Phone sign-in needs the Firebase Blaze plan for real SMS. Use a test number for now (see README).",
   };
   return map[code] || (e instanceof Error ? e.message : "Something went wrong");
 }
@@ -47,11 +41,9 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  // phone
+  // phone + PIN
   const [phone, setPhone] = useState("");
-  const [code, setCode] = useState("");
-  const [confirmation, setConfirmation] = useState<ConfirmationResult | null>(null);
-  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const [pin, setPin] = useState("");
 
   // staff
   const [email, setEmail] = useState("");
@@ -62,36 +54,22 @@ export default function LoginPage() {
     if (!loading && profile && profile.role !== "none") router.replace(homeForRole(profile.role));
   }, [loading, profile, router]);
 
-  useEffect(() => () => recaptchaRef.current?.clear(), []);
-
-  async function sendCode(e: React.FormEvent) {
+  // The server checks the PIN and hands back a custom token — free, no SMS involved.
+  async function pinLogin(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    const e164 = normalizeBdPhone(phone);
-    if (!e164) return setError("Enter a valid Bangladeshi mobile number, e.g. 01711000000");
+    if (!normalizeBdPhone(phone)) return setError("Enter a valid Bangladeshi mobile number, e.g. 01711000000");
     setBusy(true);
     try {
-      if (!recaptchaRef.current) {
-        recaptchaRef.current = new RecaptchaVerifier(auth, "recaptcha-box", { size: "invisible" });
-      }
-      setConfirmation(await signInWithPhoneNumber(auth, e164, recaptchaRef.current));
-      setInfo(`We sent a 6-digit code to ${e164}.`);
-    } catch (err) {
-      setError(friendlyError(err));
-      recaptchaRef.current?.clear();
-      recaptchaRef.current = null;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verifyCode(e: React.FormEvent) {
-    e.preventDefault();
-    if (!confirmation) return;
-    setError(null);
-    setBusy(true);
-    try {
-      await confirmation.confirm(code.trim());
+      const res = await fetch("/api/auth/pin-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, pin }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
+      if (!res.ok || !data.token) throw new Error(data.error || `Sign-in failed (${res.status})`);
+      await signInWithCustomToken(auth, data.token);
+      setPin("");
     } catch (err) {
       setError(friendlyError(err));
     } finally {
@@ -191,45 +169,37 @@ export default function LoginPage() {
       </div>
 
       {mode === "phone" ? (
-        !confirmation ? (
-          <form onSubmit={sendCode} className="space-y-4">
-            <div>
-              <label className="label">Mobile number</label>
-              <input
-                className="field"
-                inputMode="tel"
-                placeholder="01711 000000"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                autoFocus
-              />
-              <p className="mt-1.5 text-xs text-muted">Use the number your coaching center registered. No Gmail needed.</p>
-            </div>
-            <Button className="w-full" disabled={busy}>
-              {busy ? "Sending…" : "Send code"}
-            </Button>
-          </form>
-        ) : (
-          <form onSubmit={verifyCode} className="space-y-4">
-            <div>
-              <label className="label">6-digit code</label>
-              <input
-                className="field text-center text-lg tracking-[0.4em]"
-                inputMode="numeric"
-                maxLength={6}
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                autoFocus
-              />
-            </div>
-            <Button className="w-full" disabled={busy || code.length !== 6}>
-              {busy ? "Checking…" : "Sign in"}
-            </Button>
-            <button type="button" className="w-full text-xs text-muted underline" onClick={() => setConfirmation(null)}>
-              Change number
-            </button>
-          </form>
-        )
+        <form onSubmit={pinLogin} className="space-y-4">
+          <div>
+            <label className="label">Mobile number</label>
+            <input
+              className="field"
+              inputMode="tel"
+              autoComplete="username"
+              placeholder="01711 000000"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoFocus
+            />
+            <p className="mt-1.5 text-xs text-muted">Use the number your coaching center registered. No Gmail needed.</p>
+          </div>
+          <div>
+            <label className="label">6-digit PIN</label>
+            <input
+              className="field text-center text-lg tracking-[0.4em]"
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              maxLength={6}
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+            />
+            <p className="mt-1.5 text-xs text-muted">Your coaching center gives you this PIN on paper. Lost it? Ask them for a new one.</p>
+          </div>
+          <Button className="w-full" disabled={busy || pin.length !== 6}>
+            {busy ? "Checking…" : "Sign in"}
+          </Button>
+        </form>
       ) : (
         <form onSubmit={staffSubmit} className="space-y-4">
           <div>
@@ -262,9 +232,7 @@ export default function LoginPage() {
       <div className="mt-4 space-y-2">
         <ErrorNote>{error || authError}</ErrorNote>
         {info && <p className="text-sm text-brand">{info}</p>}
-      </div>
-      <div id="recaptcha-box" />
-    </Shell>
+      </div>    </Shell>
   );
 }
 

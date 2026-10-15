@@ -56,9 +56,22 @@ export interface Identity {
   children?: Student[]; // when role = guardian
 }
 
+/** Custom-token claim carrying a student's or guardian's verified phone number. */
+export const PHONE_CLAIM = "ch_phone";
+
 async function studentsWhere(field: "phone" | "guardianPhone", phone: string): Promise<Student[]> {
   const snap = await adminDb().collection("students").where(field, "==", phone).get();
   return snap.docs.map((d) => ({ ...(d.data() as Omit<Student, "id">), id: d.id }));
+}
+
+/** True when the number is some student's own phone or a guardian phone. */
+export async function isRegisteredPhone(phone: string): Promise<boolean> {
+  const students = adminDb().collection("students");
+  const [own, guardian] = await Promise.all([
+    students.where("phone", "==", phone).limit(1).get(),
+    students.where("guardianPhone", "==", phone).limit(1).get(),
+  ]);
+  return !own.empty || !guardian.empty;
 }
 
 /** Work out who the signed-in person is. Staff are created here on first login. */
@@ -66,9 +79,10 @@ export async function resolveIdentity(token: DecodedIdToken): Promise<Identity> 
   const db = adminDb();
   const uid = token.uid;
 
-  // Phone sign-in → student or guardian, matched by the numbers the center entered.
-  if (token.phone_number) {
-    const phone = token.phone_number;
+  // Phone + PIN sign-in → student or guardian, matched by the numbers the center entered.
+  // The verified number rides in the custom token our own /api/auth/pin-login issued.
+  const phone = typeof token[PHONE_CLAIM] === "string" ? (token[PHONE_CLAIM] as string) : "";
+  if (phone) {
     const asStudent = await studentsWhere("phone", phone);
     if (asStudent.length) {
       return { uid, role: "student", phone, name: asStudent[0].name, student: asStudent[0] };
@@ -126,6 +140,12 @@ export async function resolveIdentity(token: DecodedIdToken): Promise<Identity> 
 export async function requireStaff(req: Request): Promise<Identity> {
   const id = await resolveIdentity(await verifyRequest(req));
   if (id.role !== "admin" && id.role !== "teacher") throw new HttpError(403, "Staff only");
+  return id;
+}
+
+export async function requireAdmin(req: Request): Promise<Identity> {
+  const id = await resolveIdentity(await verifyRequest(req));
+  if (id.role !== "admin") throw new HttpError(403, "Admins only");
   return id;
 }
 

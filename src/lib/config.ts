@@ -22,3 +22,11 @@ export const SUBJECTS = [
 ];
 
 export const DIFFICULTIES = ["Easy", "Medium", "Hard"] as const;
+
+/**
+ * Server-side: whether guardians may use the demo online checkout. It records a payment marked
+ * "Demo" and moves no real money. On unless DEMO_PAYMENTS=false.
+ */
+export function demoPaymentsEnabled(): boolean {
+  return process.env.DEMO_PAYMENTS !== "false";
+}

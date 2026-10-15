@@ -20,7 +20,7 @@ export interface Student {
   roll: string;
   batchId: string;
   phone: string; // E.164, e.g. +8801711000000 — student's own login
-  guardianPhone: string; // E.164 — guardian's login and SMS number
+  guardianPhone: string; // E.164 — guardian's login number and message inbox
   guardianName?: string;
   createdAt: number;
 }
@@ -95,6 +95,9 @@ export interface Payment {
   amount: number;
   method: "bKash" | "Nagad" | "Cash" | "Bank";
   reference?: string;
+  // true = made with the guardian portal's demo checkout: no real money moved.
+  demo?: boolean;
+  recordedBy?: "staff" | "guardian";
   createdAt: number;
 }
 
@@ -103,8 +106,18 @@ export interface Notice {
   title: string;
   message: string;
   batchIds: string[]; // ["all"] for every batch
-  viaApp: boolean;
-  viaSms: boolean;
+  viaApp: boolean; // shown in the student and guardian portals
+  createdAt: number;
+}
+
+/** A message in a guardian's in-app inbox (absence, result, fee reminder…). Free — replaces SMS. */
+export interface GuardianMessage {
+  id: string;
+  phone: string; // guardian's E.164 number
+  studentId?: string;
+  kind: "absent" | "result" | "fee" | "notice" | "manual";
+  message: string;
+  sentBy: string;
   createdAt: number;
 }
 

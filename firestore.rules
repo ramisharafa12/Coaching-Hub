@@ -3,7 +3,8 @@ rules_version = '2';
 // Security model
 // - Staff (admin, teacher) sign in with email and use the Firestore client SDK directly.
 //   Their role lives in users/{uid}, written only by an admin or by the server.
-// - Students and guardians sign in with phone OTP and never touch Firestore directly.
+// - Students and guardians sign in with their phone number + PIN (checked by the server,
+//   which then issues a Firebase custom token) and never touch Firestore directly.
 //   Everything they see goes through the Next.js API routes, which use the Admin SDK
 //   and only return that person's own data. This keeps answer keys and other
 //   students' data out of their reach.
@@ -44,7 +45,16 @@ service cloud.firestore {
     match /notices/{id}    { allow read, write: if isStaff(); }
 
     match /exams/{examId} {
-      allow read, write: if isStaff();
+      allow read: if isStaff();
+      // New exams start with no results.
+      allow create: if isStaff()
+        && request.resource.data.submittedCount == 0
+        && request.resource.data.scoreSum == 0;
+      // The result counters are kept by the server alongside each submission.
+      allow update: if isStaff()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['submittedCount', 'scoreSum']);
+      // Teachers may delete an exam nobody has sat; one with results needs an admin.
+      allow delete: if isAdmin() || (isStaff() && resource.data.submittedCount == 0);
 
       match /submissions/{studentId} {
         allow read: if isStaff();
@@ -53,9 +63,15 @@ service cloud.firestore {
       }
     }
 
-    match /smsLog/{id} {
+    // In-app messages to guardians (absence, results, fee reminders). Free — no SMS.
+    match /messages/{id} {
       allow read: if isStaff();
       allow write: if false; // server only
+    }
+
+    // Hashed login PINs for student and guardian phone numbers.
+    match /phoneLogins/{phone} {
+      allow read, write: if false; // server only
     }
   }
 }

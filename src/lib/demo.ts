@@ -1,18 +1,25 @@
-"use client";
-
-import { collection, doc, writeBatch } from "firebase/firestore";
-import { db } from "./firebase";
-import type { Batch, Difficulty, Exam, ExamQuestion, Notice, Payment, Question, Student } from "./types";
+import "server-only";
+import { adminDb } from "./firebase-admin";
+import { setNewPin } from "./pin";
+import type { Batch, Difficulty, Exam, ExamQuestion, GuardianMessage, Notice, Payment, Question, Student } from "./types";
 import { dhakaMonth } from "./utils";
 
+export interface DemoLogin {
+  label: string;
+  phone: string;
+  pin: string;
+}
+
 /**
- * Fills an empty project with sample data that matches the mockups, so you can
- * click around immediately. Student 01700000001 and guardian 01800000001 can log
- * in once you add them as Firebase test phone numbers (see README).
+ * Fills an empty project with sample data that matches the mockups, so you can click around
+ * immediately. Runs on the server so it can also give one demo student and one demo guardian
+ * a login PIN, which it returns (PINs are stored only as hashes).
  */
-export async function loadDemoData() {
+export async function loadDemoData(sentBy: string): Promise<DemoLogin[]> {
+  const db = adminDb();
   const now = Date.now();
-  const wb = writeBatch(db);
+  const wb = db.batch();
+  const ref = (collection: string) => db.collection(collection).doc();
 
   const batches: Omit<Batch, "id">[] = [
     { name: "Physics 1st Paper · Morning A", subject: "Physics 1st Paper", teacherName: "Md. Rakibul Hasan", schedule: "Sat, Mon, Wed · 7:00 AM", fee: 1200, createdAt: now },
@@ -23,9 +30,9 @@ export async function loadDemoData() {
     { name: "English · Morning C", subject: "English", teacherName: "Farhana Rahman", schedule: "Sun, Tue, Thu · 9:30 AM", fee: 800, createdAt: now },
   ];
   const batchIds = batches.map((b) => {
-    const ref = doc(collection(db, "batches"));
-    wb.set(ref, b);
-    return ref.id;
+    const r = ref("batches");
+    wb.set(r, b);
+    return r.id;
   });
   const physicsA = batchIds[0];
 
@@ -33,11 +40,10 @@ export async function loadDemoData() {
     "Rafi Ahmed", "Tania Islam", "Sakib Hasan", "Ayesha Siddika", "Imran Hossain", "Farzana Yeasmin",
     "Mehedi Hasan", "Nusrat Jahan Mim", "Arif Rahman", "Sadia Afrin", "Tanvir Alam", "Jannatul Ferdous",
   ];
-  const studentIds: string[] = [];
-  names.forEach((name, i) => {
-    const ref = doc(collection(db, "students"));
+  const students: (Omit<Student, "id"> & { id: string })[] = names.map((name, i) => {
     const n = String(i + 1).padStart(2, "0");
-    const s: Omit<Student, "id"> = {
+    const s = {
+      id: ref("students").id,
       name,
       roll: `HSC26-${String(10 + i * 3).padStart(3, "0")}`,
       batchId: i < 8 ? physicsA : batchIds[(i % 5) + 1],
@@ -46,8 +52,9 @@ export async function loadDemoData() {
       guardianName: `Guardian of ${name.split(" ")[0]}`,
       createdAt: now,
     };
-    wb.set(ref, s);
-    studentIds.push(ref.id);
+    const { id, ...data } = s;
+    wb.set(db.collection("students").doc(id), data);
+    return s;
   });
 
   const qs: [string, Difficulty, string, string[], number, string][] = [
@@ -66,10 +73,10 @@ export async function loadDemoData() {
   ];
   const examQuestions: ExamQuestion[] = [];
   qs.forEach(([chapter, difficulty, text, options, answer, explanation]) => {
-    const ref = doc(collection(db, "questions"));
+    const r = ref("questions");
     const q: Omit<Question, "id"> = { subject: "Physics 1st Paper", chapter, difficulty, text, options, answer, explanation, usedIn: 1, createdAt: now };
-    wb.set(ref, q);
-    examQuestions.push({ id: ref.id, text, options, answer, explanation, chapter, difficulty });
+    wb.set(r, q);
+    examQuestions.push({ id: r.id, text, options, answer, explanation, chapter, difficulty });
   });
 
   // One exam live right now (open for 60 minutes) and one scheduled for later.
@@ -87,35 +94,52 @@ export async function loadDemoData() {
     scoreSum: 0,
     createdAt: now,
   };
-  wb.set(doc(collection(db, "exams")), live);
+  wb.set(ref("exams"), live);
+  const vectors = examQuestions.filter((q) => q.chapter === "Vectors");
   const scheduled: Omit<Exam, "id"> = {
     ...live,
     title: "Chapter Test · Vectors",
     startAt: now + 2 * 86400000,
     durationMin: 15,
-    questions: examQuestions.filter((q) => q.chapter === "Vectors"),
-    totalMarks: examQuestions.filter((q) => q.chapter === "Vectors").length,
+    questions: vectors,
+    totalMarks: vectors.length,
   };
-  wb.set(doc(collection(db, "exams")), scheduled);
+  wb.set(ref("exams"), scheduled);
 
-  // A few payments this month
+  // A few payments this month (recorded by staff, paid offline)
   const month = dhakaMonth(now);
   [3, 5].forEach((i) => {
-    const p: Omit<Payment, "id"> = { studentId: studentIds[i], batchId: physicsA, month, amount: 1200, method: "bKash", reference: `8N7A5K2Q${i}D`, createdAt: now };
-    wb.set(doc(collection(db, "payments")), p);
+    const p: Omit<Payment, "id"> = { studentId: students[i].id, batchId: physicsA, month, amount: 1200, method: "bKash", reference: `8N7A5K2Q${i}D`, recordedBy: "staff", createdAt: now };
+    wb.set(ref("payments"), p);
   });
-  const partial: Omit<Payment, "id"> = { studentId: studentIds[4], batchId: physicsA, month, amount: 600, method: "Cash", createdAt: now };
-  wb.set(doc(collection(db, "payments")), partial);
+  const partial: Omit<Payment, "id"> = { studentId: students[4].id, batchId: physicsA, month, amount: 600, method: "Cash", recordedBy: "staff", createdAt: now };
+  wb.set(ref("payments"), partial);
 
   const notice: Omit<Notice, "id"> = {
     title: "Model Test 04 is live now",
     message: "10 questions, 0.25 negative marking. Open the app and start from Exams.",
     batchIds: [physicsA],
     viaApp: true,
-    viaSms: false,
     createdAt: now,
   };
-  wb.set(doc(collection(db, "notices")), notice);
+  wb.set(ref("notices"), notice);
+
+  // One message in Rafi's guardian's inbox, so the Messages card has something to show.
+  const welcome: Omit<GuardianMessage, "id"> = {
+    phone: students[0].guardianPhone,
+    studentId: students[0].id,
+    kind: "manual",
+    message: "Coaching Hub: Welcome! Absence alerts, exam results and fee reminders for Rafi Ahmed will appear here.",
+    sentBy,
+    createdAt: now,
+  };
+  wb.set(ref("messages"), welcome);
 
   await wb.commit();
+
+  const rafi = students[0];
+  return [
+    { label: `Student · ${rafi.name}`, phone: rafi.phone, pin: await setNewPin(rafi.phone) },
+    { label: `Guardian · ${rafi.guardianName}`, phone: rafi.guardianPhone, pin: await setNewPin(rafi.guardianPhone) },
+  ];
 }

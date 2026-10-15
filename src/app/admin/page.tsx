@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { Badge, Button, Card, CardTitle, Empty, PageHeader, Spinner, StatCard } from "@/components/ui";
 import { APP_NAME, SESSION_LABEL } from "@/lib/config";
-import { loadDemoData } from "@/lib/demo";
+import type { DemoLogin } from "@/lib/demo";
 import { feeReminderText, feeRows } from "@/lib/fees";
 import { useById, useCollection } from "@/lib/hooks";
 import type { AttendanceDoc, Batch, Exam, Payment, Student } from "@/lib/types";
@@ -23,7 +23,9 @@ export default function Dashboard() {
   const attendance = useCollection<AttendanceDoc>("attendance", [where("date", "==", today)], today);
   const batchMap = useById(batches.data);
   const [seeding, setSeeding] = useState(false);
-  const [smsSent, setSmsSent] = useState<Record<string, boolean>>({});
+  const [reminded, setReminded] = useState<Record<string, boolean>>({});
+  const [demoLogins, setDemoLogins] = useState<DemoLogin[] | null>(null);
+  const [seedError, setSeedError] = useState<string | null>(null);
 
   const rows = useMemo(
     () => feeRows(students.data, batchMap, payments.data, month).filter((r) => r.due > 0),
@@ -37,10 +39,15 @@ export default function Dashboard() {
 
   if (batches.loading || students.loading || exams.loading) return <Spinner />;
 
+  // Demo data is written on the server so it can also give two demo accounts login PINs.
   async function seed() {
     setSeeding(true);
+    setSeedError(null);
     try {
-      await loadDemoData();
+      const r = await api<{ logins: DemoLogin[] }>("/api/admin/demo", { method: "POST" });
+      setDemoLogins(r.logins);
+    } catch (err) {
+      setSeedError(err instanceof Error ? err.message : "Could not load demo data");
     } finally {
       setSeeding(false);
     }
@@ -49,14 +56,14 @@ export default function Dashboard() {
   async function remind(studentId: string) {
     const row = rows.find((r) => r.student.id === studentId);
     if (!row) return;
-    await api("/api/sms", {
+    await api("/api/messages", {
       method: "POST",
       body: JSON.stringify({
         kind: "fee",
-        messages: [{ phone: row.student.guardianPhone, message: feeReminderText(APP_NAME, row, monthLabel(month)) }],
+        messages: [{ phone: row.student.guardianPhone, studentId, message: feeReminderText(APP_NAME, row, monthLabel(month)) }],
       }),
     });
-    setSmsSent((s) => ({ ...s, [studentId]: true }));
+    setReminded((s) => ({ ...s, [studentId]: true }));
   }
 
   return (
@@ -86,6 +93,29 @@ export default function Dashboard() {
               <Button variant="outline">Create a batch</Button>
             </Link>
           </div>
+          {seedError && <p className="mt-3 text-sm text-danger">{seedError}</p>}
+        </Card>
+      )}
+
+      {demoLogins && (
+        <Card className="mb-5 border-2 border-brand">
+          <CardTitle action={<button className="text-xs text-muted underline" onClick={() => setDemoLogins(null)}>Dismiss</button>}>
+            Demo data loaded — try the other portals
+          </CardTitle>
+          <p className="mb-3 text-sm text-muted">
+            In another browser (or a private window), open the login page, choose <b>Student / Guardian</b> and use one of these.
+            The PINs are shown only now; you can make new ones any time under Students.
+          </p>
+          <ul className="divide-y divide-line text-sm">
+            {demoLogins.map((l) => (
+              <li key={l.phone} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  <b>{l.label}</b> · {prettyPhone(l.phone)}
+                </span>
+                <span className="font-mono text-base font-bold tracking-widest">{l.pin}</span>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 
@@ -163,8 +193,8 @@ export default function Dashboard() {
                       {shortBatch(r.batch?.name)} · {taka(r.due)} · {prettyPhone(r.student.guardianPhone)}
                     </div>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => remind(r.student.id)} disabled={smsSent[r.student.id]}>
-                    {smsSent[r.student.id] ? "Sent" : "Send SMS"}
+                  <Button size="sm" variant="outline" onClick={() => remind(r.student.id)} disabled={reminded[r.student.id]}>
+                    {reminded[r.student.id] ? "Sent" : "Remind"}
                   </Button>
                 </li>
               ))}

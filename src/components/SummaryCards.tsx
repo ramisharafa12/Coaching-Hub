@@ -9,7 +9,7 @@ function weekday(date: string) {
 }
 
 /** The three cards from the guardian mockup: attendance, latest exam, monthly fee. */
-export function SummaryCards({ s }: { s: StudentSummary }) {
+export function SummaryCards({ s, onPay }: { s: StudentSummary; onPay?: () => void }) {
   return (
     <div className="grid gap-3 md:grid-cols-3">
       <Card>
@@ -67,6 +67,11 @@ export function SummaryCards({ s }: { s: StudentSummary }) {
         </div>
         <div className="mt-4 text-3xl font-bold">{taka(s.fee.amount)}</div>
         {s.fee.status === "Partial" && <div className="text-xs text-muted">Paid {taka(s.fee.paid)} · {taka(s.fee.amount - s.fee.paid)} left</div>}
+        {onPay && s.fee.status !== "Paid" && (
+          <button onClick={onPay} className="mt-3 w-full rounded-lg border border-brand px-3 py-2 text-sm font-semibold text-brand hover:bg-brand-soft/50">
+            Pay online (demo)
+          </button>
+        )}
       </Card>
     </div>
   );

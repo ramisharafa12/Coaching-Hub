@@ -1,5 +1,5 @@
-import { TIME_ZONE } from "./config";
-import type { Exam, ExamState } from "./types";
+import { SUBMIT_GRACE_SECONDS, TIME_ZONE } from "./config";
+import type { Exam, ExamState, Student } from "./types";
 
 /** Normalize a Bangladeshi mobile number to E.164 (+8801XXXXXXXXX). Returns "" if invalid. */
 export function normalizeBdPhone(input: string | number | null | undefined): string {
@@ -10,6 +10,25 @@ export function normalizeBdPhone(input: string | number | null | undefined): str
   if (digits.length === 10 && digits.startsWith("1")) digits = "0" + digits;
   if (!/^01[3-9]\d{8}$/.test(digits)) return "";
   return "+88" + digits;
+}
+
+/**
+ * A student and a guardian each log in with their own number, and the server tells them apart
+ * by it, so a number may be a student's own phone or a guardian phone, never both.
+ * (One guardian phone may cover several children.) Returns a message, or null when it's fine.
+ */
+export function phoneClash(
+  students: Pick<Student, "id" | "name" | "phone" | "guardianPhone">[],
+  s: { id?: string; phone: string; guardianPhone: string }
+): string | null {
+  if (s.phone === s.guardianPhone) return "Student and guardian need different numbers — each logs in with their own.";
+  for (const o of students) {
+    if (o.id === s.id) continue;
+    if (o.phone === s.phone) return `${prettyPhone(s.phone)} already belongs to ${o.name}.`;
+    if (o.guardianPhone === s.phone) return `${prettyPhone(s.phone)} is already ${o.name}'s guardian number.`;
+    if (o.phone === s.guardianPhone) return `${prettyPhone(s.guardianPhone)} is ${o.name}'s own number, so it can't be a guardian number.`;
+  }
+  return null;
 }
 
 /** +8801711000000 -> 01711-000000 */
@@ -80,6 +99,11 @@ export function msToDhakaLocal(ms: number): string {
 
 export function examEndsAt(exam: Pick<Exam, "startAt" | "durationMin">): number {
   return exam.startAt + exam.durationMin * 60 * 1000;
+}
+
+/** When answers and solutions may be shown: after the late-submit grace window has closed too. */
+export function solutionsAt(exam: Pick<Exam, "startAt" | "durationMin">): number {
+  return examEndsAt(exam) + SUBMIT_GRACE_SECONDS * 1000;
 }
 
 export function examState(exam: Pick<Exam, "startAt" | "durationMin">, now = Date.now()): ExamState {

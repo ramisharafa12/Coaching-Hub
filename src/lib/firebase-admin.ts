@@ -8,6 +8,9 @@ function adminApp() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   // With the emulators (FIRESTORE_EMULATOR_HOST / FIREBASE_AUTH_EMULATOR_HOST set) no service account is needed.
   if (process.env.FIRESTORE_EMULATOR_HOST) {
+    // Off Google Cloud there is no metadata server to find; without this the first request
+    // waits ~15 s for that lookup to time out.
+    process.env.METADATA_SERVER_DETECTION ??= "none";
     return initializeApp({ projectId: projectId || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "demo-coaching" });
   }
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
